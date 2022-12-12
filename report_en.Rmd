@@ -1,0 +1,258 @@
+---
+title: "Levels of financial anxiety related to global COVID-19 pandemic by different groups of population in 2021"
+author: "Denis Usalev"
+language: en
+date: "2022-12-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(tidyr)
+```
+
+#### Dataset description
+
+
+This dataset was collected by the World Bank and is available at the [World Bank DataBank](https://databank.worldbank.org/source/global-financial-inclusion) website.
+
+
+Description:
+
+
+>The Global Financial Inclusion Database provides over 800 country-level indicators of financial inclusion summarized for all adults and disaggregated by key demographic characteristics: gender, age, education, income, and rural residence. Covering more than 150 economies, the indicators of financial inclusion measure how people save, borrow, make payments and manage risk.
+
+
+Dataset last updated at: 2022-10-24.
+
+
+
+#### Research goal.
+
+For this research we are interested in how different groups of population evaluate their personal financial situation after the global pandemic of COVID-19. The data is available for 2021, which is the key year in the pandemic when the most severe consequences of various disease prevention measures implemented by most of the world's governments had become apparent. We formulate several hypotheses according to the general template of "Has there been an impact on people's general anxiety about their personal financial situations based on their ...", with different population grouping criteria as the dependent variable, and the anxiety level as the independent variable.
+
+We accept $\alpha = 0.05$ as our common level of statistical significance for all tests.
+
+We use dplyr, stringr, ggplot2, tidyr libraries in the project.
+
+#### Loading and cleaning data.
+
+```{r}
+finincl <- read.csv("finincl.csv", stringsAsFactors = T, na.strings = '..')
+str(finincl)
+```
+
+At the first glance our dataset contains 7142 observations of 5 variables. Data is given with respect to different countries and various levels of grouping of the sample population. Column X2021..YR2021. contains percentages of respondents who were asked to assess their anxiety level on the following question: "Do you experience or continue to experience severe financial hardship as a result of the disruption caused by COVID-19?". The three options were: not worried, somewhat worried, worried. Because both 'somewhat worried' and 'worried' mean a degree of anxiety above 0, we decided to combine these results into one group.
+
+It is important to note that data available from the dataset is given as a *proportion* of the sample, not as absolute numbers. Therefore, to perform contingency table tests we need to convert the proportion back to absolute numbers. 
+There are two important factors to be aware of. First, [Survey metodology](https://thedocs.worldbank.org/en/doc/f3ee545aac6879c27f8acb61abc4b6f8-0050062022/original/Findex-2021-Methodology.pdf) gives an approximate number of respondents as 128000 all over the world, and also gives specific numbers of respondents in each country separately. Because n = 128000 is sufficiently big, we take it as is with tolerance for rounding errors. Second, the resulting proportions in the dataset are *weighted* both for the unequal probability of selection and for the sampling errors. This means that for each group we can safely assume the 1:1 proportion for restoring the original count of the respondents.
+
+Because the Series.Name variable contains the full wording of the question, we can remove the question and leave only the relevant part.
+Our percentage column also contains missing values which we need to clean.
+We also rename the column containing percentage for easier code manipulation later on.
+
+```{r}
+finincl <- finincl %>% 
+  filter(if_all(.fns = ~ !is.na(.x))) %>% 
+  mutate(Series.Short = factor(str_match(Series.Name, "(?<=: ).*$"))) %>% 
+  mutate(Pct = X2021..YR2021.)
+  droplevels
+str(finincl)
+```
+
+The total amount of meaningful observations went down to 3552. What is interesting, in the process we have also lost half of the countries. This is explained by the fact that the data loading interface on the World Bank website allows to choose all the countries for which any data is available at all, but then loads only selected data for a specific request.
+
+Some of our shorter categories are:
+
+```{r}
+head(unique(finincl$Series.Short))
+```
+
+The data is encoded as strings, for each anxiety level and for several different classifications of the populaton:
+
+* income (poor, rich)
+* sex (male, female)
+* employment (in labor, out of labor)
+* education (primary or less, secondary or more)
+* area (rural, urban)
+* age (15-24, 24+)
+
+We cannot get intersection of all these variables, because data is only grouped by anxiety levels separately for each factor, so it is necessary to process every group on its own. Sex, education and area classifications seem the most interesting.
+
+
+#### Hypotheses
+
+For each population grouping of:
+
+* females and males
+* people with different levels of education 
+* employed/unemployed people
+
+there are no significant differences between levels of anxiety related to their self-assessment of their personal financial situation.
+
+
+#### Methodology
+
+Our dependent and independent variables are both nominative. We used stacked barcharts as a way to graphically show existing differences and Chi-squared statistical test to confirm or disprove our hypotheses analytically. 
+
+
+#### Female vs. male
+
+Helper function processes our dataframe, parsing necessary groupings from the set and removing extra columns.
+
+We use it to create a dataset of observations where the only differing group is sex (female or male). We look at the data for the world without dividing by countries. It is available to us under the 'World' value of the Country.Name variable.
+
+```{r}
+make_var_df <- function(dtf, pattern, col_name, levels){
+  new_dft <- dtf %>% 
+    filter(Series.Short <- str_detect(Series.Short, pattern)) %>% 
+    droplevels
+  new_dft$Anxiety <- factor(str_extract(new_dft$Series.Short, "^([a-z]+) w", 
+                                        group = 1), 
+                            levels = c("not", "somewhat", "very"))
+  levels(new_dft$Anxiety) <- c("No", "Yes", "Yes")
+  new_dft[[col_name]] <- factor(str_extract(new_dft$Series.Short, 
+                                            paste0(c("(", pattern, ")"),
+                                                   collapse = ''),
+                                            group = 1))
+  new_dft[c("Country.Name", "Pct", "Anxiety", col_name)]
+  new_dft %>% 
+    filter(Country.Name == "World") %>% 
+    group_by(across(c(all_of(col_name), "Anxiety"))) %>% 
+    summarize(Pct = sum(Pct)) %>% 
+    ungroup()
+}
+finincl_sex <- make_var_df(finincl, "male|female", "Sex")
+str(finincl_sex)
+```
+
+Let's draw a chart.
+
+```{r}
+ggplot(finincl_sex, aes(x = Sex, y = Pct, fill = Anxiety)) +
+  geom_col() +
+  ggtitle(label = "Levels of anxiety by sex, %",
+          subtitle = "Data source: World Bank, 2022\nhttps://databank.worldbank.org/source/global-financial-inclusion") +
+  theme(plot.subtitle = element_text(size = 8)) +
+  scale_fill_brewer(palette = "OrRd") +
+  scale_y_continuous("% of respondents",
+                     breaks = seq(0, 100, 25),
+                     labels = paste0(seq(0, 100, 25), rep("%", 5)))
+```
+
+We can see a certain difference in the data, with males being slightly less worried about the financial hardship than females, but it's not definitive.
+Let's convert our data to a wide form, approximate original count of respondents and perform the test.
+
+```{r}
+sex_abs <- finincl_sex %>% 
+  select(Anxiety, Sex, Pct) %>% 
+  mutate(Pct = Pct * 128000 / 2) %>% 
+  pivot_wider(names_from = Anxiety, values_from = Pct) %>% 
+  select(2:3)
+sex_abs <- as.data.frame(sex_abs)
+rownames(sex_abs) <- c('Female', 'Male')
+chisq.test(sex_abs)
+```
+
+#### Result
+
+With the resulting $p < 0.05$ we can safely reject the null hypothesis and state that there exist a significant difference between levels of anxiety for the financial situations in females and males: **females are statistically more likely to feel greater levels of anxiety**.
+
+#### Education differences
+
+We move on to comparing groups with different levels of education, which are:
+
+* primary education or less
+* secondary education or more.
+
+Data processing is done the same as before.
+
+```{r}
+finincl_edu <- make_var_df(finincl, 
+                           "primary education or less|secondary education or more", 
+                           "Education")
+str(finincl_edu)
+```
+
+Chart:
+
+```{r}
+ggplot(finincl_edu, aes(x = Education, y = Pct, fill = Anxiety)) +
+  geom_col() +
+  ggtitle(label = "Levels of anxiety by education, %",
+          subtitle = "Data source: World Bank, 2022\nhttps://databank.worldbank.org/source/global-financial-inclusion") +
+  theme(plot.subtitle = element_text(size = 8)) +
+  scale_fill_brewer(palette = "OrRd") +
+  scale_y_continuous("% of respondents",
+                     breaks = seq(0, 100, 25),
+                     labels = paste0(seq(0, 100, 25), rep("%", 5)))
+```
+
+The differences seem even more pronounced for this classification. Let's confirm our findings.
+
+```{r}
+edu_abs <- finincl_edu %>% 
+  select(Anxiety, Education, Pct) %>% 
+  mutate(Pct = Pct * 128000 / 2) %>% 
+  pivot_wider(names_from = Anxiety, values_from = Pct) %>% 
+  select(2:3)
+edu_abs <- as.data.frame(edu_abs)
+rownames(edu_abs) <- c('Primary', 'Secondary')
+chisq.test(edu_abs)
+```
+
+#### Result
+
+With the resulting $p < 0.05$ we can safely reject the null hypothesis and state that there exist a significant difference between levels of anxiety for the financial situations in people with primary education or lower and people with secondary education or higher: **people with higher levels of education are statistically less likely to worry about their financial situation**.
+
+#### Employment
+
+The last comparison we do is the employment situation: those currently employed and those who are unemployed.
+Repeat the data processing.
+
+```{r}
+finincl_emp <- make_var_df(finincl, 
+                           "in labor|out of labor", 
+                           "Employment")
+str(finincl_emp)
+```
+
+Chart:
+
+```{r}
+ggplot(finincl_emp, aes(x = Employment, y = Pct, fill = Anxiety)) +
+  geom_col() +
+  ggtitle(label = "Levels of anxiety by employment status, %",
+          subtitle = "Data source: World Bank, 2022\nhttps://databank.worldbank.org/source/global-financial-inclusion") +
+  theme(plot.subtitle = element_text(size = 8)) +
+  scale_fill_brewer(palette = "OrRd") +
+  scale_y_continuous("% of respondents",
+                     breaks = seq(0, 100, 25),
+                     labels = paste0(seq(0, 100, 25), rep("%", 5)))
+```
+
+In this case, it looks like there are no observable differences between two groups. But our sample size is quite large, so large in fact that significant differences can be invisible on a graph.
+
+```{r}
+emp_abs <- finincl_emp %>% 
+  select(Anxiety, Employment, Pct) %>% 
+  mutate(Pct = Pct * 128000 / 2) %>% 
+  pivot_wider(names_from = Anxiety, values_from = Pct) %>% 
+  select(2:3)
+emp_abs <- as.data.frame(emp_abs)
+rownames(emp_abs) <- c('In labor', 'Out of labor')
+chisq.test(emp_abs)
+```
+
+#### Result
+
+Indeed, this time the $\chi^2$ statistic is much lower than in the previous two examples. However,
+with the resulting $p < 0.05$ we can still safely reject the null hypothesis and state that there exist a significant difference between levels of anxiety for the financial situations for employed and unemployed respondents: **people who are currently employed are statistically more likely to be less worried than those without a job**.
+
+
+#### Conclusion
+
+We have managed to successfully prove the existence of significant differences among all groups of population in terms of their assessment of their personal financial situation.
